@@ -5,100 +5,75 @@ from torch import nn, optim
 from torchvision import transforms
 from torchvision.utils import save_image
 from torch.utils.data import DataLoader
+import numpy as np
+import pandas as pd 
 
 #  locals
 from variational_autoencoder import VariationalAutoEncoder
 from dataset_loader import DatasetLoader
 
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-image_size = 28
+class Outliers:
 
-transforms = A.Compose(
-    [
-        A.SmallestMaxSize(max_size=image_size),
-        A.CenterCrop(height=image_size, width=image_size),
-        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-        ToTensorV2(),
-    ]
-)
+    def __init__(self, data_path):
 
-dataset = DatasetLoader("./dataset2/testA/", transforms)
+        self.dataset = DatasetLoader(data_path)
+        self.loader = DataLoader(
+            self.dataset, batch_size=20, shuffle=True
+        )
 
-loader = DataLoader(
-    dataset, batch_size=20, shuffle=True
-)
+        self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.INPUT_DIM = 784*3
+        self.H_DIM = 200
+        self.Z_DIM = 20
+        self.NUM_EPOCHS = 14
+        self.BATCH_SIZE = 32
+        self.LR_RATE = 3e-4
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-INPUT_DIM = 784*3
-H_DIM = 200
-Z_DIM = 20
+        return
 
-NUM_EPOCHS = 10
-BATCH_SIZE = 32
+    def find(self):
 
-LR_RATE = 3e-4
+        """
+        """
 
-#  dataset = datasets.MNIST(root="dataset/", train=True, transform=transforms.ToTensor(), download=True)
-
-#  train_loader = DataLoader(dataset=dataset, batch_size=BATCH_SIZE, shuffle=True)
-model = VariationalAutoEncoder(INPUT_DIM, H_DIM, Z_DIM).to(DEVICE)
-optimizer = optim.Adam(model.parameters(), lr=LR_RATE)
-loss_fn = nn.BCELoss(reduction="sum")
+        model = VariationalAutoEncoder(self.INPUT_DIM, self.H_DIM, self.Z_DIM).to(self.DEVICE)
+        optimizer = optim.Adam(model.parameters(), lr=self.LR_RATE)
+        loss_fn = nn.BCELoss(reduction="sum")
 
 
+        result_names = []
+        result = []
 
-for epoch in range(NUM_EPOCHS):
-    loop = tqdm(enumerate(loader))
-    for i, (x) in loop:
-        # forward pass
+        for epoch in range(self.NUM_EPOCHS):
+            loop = tqdm(enumerate(self.loader))
+            for i, (x, names) in loop:
+                # forward pass
 
-        print(x)
+                x = x.to(self.DEVICE).view(x.shape[0], self.INPUT_DIM)
 
-        x = x.to(DEVICE).view(x.shape[0], INPUT_DIM)
+                x_reconstructed, mu, sigma = model(x)
 
-        x_reconstructed, mu, sigma = model(x)
+                reconstruction_error = (x_reconstructed - x)
 
-        reconstruction_loss = loss_fn(x_reconstructed, x)
-        kl_div = -torch.sum(1 + torch.log(sigma.pow(2)) - mu.pow(2) - sigma.pow(2))
+                reconstruction_loss = loss_fn(x_reconstructed, x)
+                kl_div = -torch.sum(1 + torch.log(sigma.pow(2)) - mu.pow(2) - sigma.pow(2))
 
+                if epoch == self.NUM_EPOCHS-1:
+                    result.append(reconstruction_error.cpu().detach().numpy())
+                    result_names.append(names)
 
-        #backprop
-        loss = reconstruction_loss + kl_div
-        print(reconstruction_loss)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        loop.set_postfix(loss=loss.item())
+                #backprop
+                loss = reconstruction_loss + kl_div
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                loop.set_postfix(loss=loss.item())
 
-#  def inference(digit, num_examples=1):
-#
-#      images = []
-#      idx = 0
-#      for x, y in dataset:
-#          if y == idx:
-#              images.append(x)
-#              idx += 1
-#
-#          if idx == 10:
-#              break
-#
-#      encodings_digit = []
-#      for d in range(10):
-#          with torch.no_grad():
-#              mu, sigma = model.encode(images[d].view(1, 784))
-#          encodings_digit.append((mu, sigma))
-#
-#      mu, sigma = encodings_digit[digit]
-#      for example in range(num_examples):
-#          epsilon = torch.randn_like(sigma)
-#          z = mu + sigma * epsilon
-#          out = model.decode(z)
-#          out = out.view(-1, 1, 28, 28)
-#          save_image(out, f"generated_{digit}_ex{example}.png")
-#
-#  for idx in range(10):
-#      inference(idx, num_examples=1)
+        result = list(map(lambda x: sum(x**2), np.concatenate(result, axis=0)))
+        result_names = np.concatenate(result_names, axis=0)
 
+        final_list = list(zip(result, result_names))
 
+        return pd.DataFrame(final_list).sort_values(0, ascending=False)
 
+#  return final_list
